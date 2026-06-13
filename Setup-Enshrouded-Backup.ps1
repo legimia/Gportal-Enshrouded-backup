@@ -21,6 +21,8 @@
 # Optional installer features:
 # - Install WinSCP if missing
 # - Install BurntToast PowerShell module for Windows toast notifications
+#
+# Scheduled backups run silently/hidden.
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -221,6 +223,37 @@ function Install-BurntToastIfNeeded {
     }
     catch {
         return "BurntToast install failed: $($_.Exception.Message)"
+    }
+}
+
+function Run-FirstBackup {
+    param (
+        [string]$BackupScriptPath,
+        [string]$LogsFolder
+    )
+
+    try {
+        if (!(Test-Path $BackupScriptPath)) {
+            return "First backup was not run. Backup script was not found: $BackupScriptPath"
+        }
+
+        $arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$BackupScriptPath`""
+
+        $process = Start-Process `
+            -FilePath "powershell.exe" `
+            -ArgumentList $arguments `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
+
+        if ($process.ExitCode -eq 0) {
+            return "First backup completed successfully. Check logs folder: $LogsFolder"
+        }
+
+        return "First backup failed with exit code $($process.ExitCode). Check logs folder: $LogsFolder"
+    }
+    catch {
+        return "First backup failed to start: $($_.Exception.Message)"
     }
 }
 
@@ -1069,12 +1102,12 @@ pause
 
         $loggedOffContent = @"
 @echo off
-title Create Enshrouded Backup Scheduled Task
+title Create Silent Enshrouded Backup Scheduled Task
 set "TASK_NAME=$TaskName"
 set "SCRIPT_PATH=$BackupScriptPath"
 set "TASK_USER=%USERDOMAIN%\%USERNAME%"
 
-echo Creating scheduled task that runs even when Windows is at the logon screen.
+echo Creating scheduled task that runs silently, even when Windows is at the logon screen.
 echo.
 echo Task name: %TASK_NAME%
 echo User: %TASK_USER%
@@ -1085,7 +1118,7 @@ echo.
 
 schtasks /Delete /TN "%TASK_NAME%" /F >nul 2>nul
 
-schtasks /Create /TN "%TASK_NAME%" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""%SCRIPT_PATH%""" /SC HOURLY /MO $RunEveryHours /ST 00:00 /RL LIMITED /RU "%TASK_USER%" /RP * /F
+schtasks /Create /TN "%TASK_NAME%" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""%SCRIPT_PATH%""" /SC HOURLY /MO $RunEveryHours /ST 00:00 /RL LIMITED /RU "%TASK_USER%" /RP * /F
 
 echo.
 pause
@@ -1095,12 +1128,12 @@ pause
 
         $loggedInContent = @"
 @echo off
-title Create Enshrouded Backup Scheduled Task
+title Create Silent Enshrouded Backup Scheduled Task
 set "TASK_NAME=$TaskName"
 set "SCRIPT_PATH=$BackupScriptPath"
 set "TASK_USER=%USERDOMAIN%\%USERNAME%"
 
-echo Creating scheduled task that runs only when this Windows user is logged in.
+echo Creating scheduled task that runs silently when this Windows user is logged in.
 echo.
 echo Task name: %TASK_NAME%
 echo User: %TASK_USER%
@@ -1109,7 +1142,7 @@ echo.
 
 schtasks /Delete /TN "%TASK_NAME%" /F >nul 2>nul
 
-schtasks /Create /TN "%TASK_NAME%" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""%SCRIPT_PATH%""" /SC HOURLY /MO $RunEveryHours /ST 00:00 /RL LIMITED /RU "%TASK_USER%" /IT /F
+schtasks /Create /TN "%TASK_NAME%" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""%SCRIPT_PATH%""" /SC HOURLY /MO $RunEveryHours /ST 00:00 /RL LIMITED /RU "%TASK_USER%" /IT /F
 
 echo.
 pause
@@ -1154,7 +1187,7 @@ pause
         $taskMessage = "Scheduled task was not created."
 
         if ($chkCreateTask.Checked) {
-            $TaskRun = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$BackupScriptPath`""
+            $TaskRun = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$BackupScriptPath`""
 
             & schtasks.exe /Delete /TN $TaskName /F 2>$null | Out-Null
 
@@ -1178,7 +1211,7 @@ pause
                     throw "Setup files were created, but scheduled task creation failed.`r`n`r`n$taskOutput"
                 }
 
-                $taskMessage = "Scheduled task created. It can run while Windows is at the logon screen."
+                $taskMessage = "Scheduled task created. It runs silently and can run while Windows is at the logon screen."
             }
             else {
                 if ([string]::IsNullOrWhiteSpace($TaskUser)) {
@@ -1204,8 +1237,16 @@ pause
                     throw "Setup files were created, but scheduled task creation failed.`r`n`r`n$taskOutput"
                 }
 
-                $taskMessage = "Scheduled task created. It will run only when that Windows user is logged in."
+                $taskMessage = "Scheduled task created. It runs silently when that Windows user is logged in."
             }
+        }
+
+        $FirstBackupMessage = "First backup was not run."
+
+        if ($chkRunBackupAfterInstall.Checked) {
+            $FirstBackupMessage = Run-FirstBackup `
+                -BackupScriptPath $BackupScriptPath `
+                -LogsFolder $LogsFolder
         }
 
         $summary = @"
@@ -1241,6 +1282,9 @@ $WinSCPMessage
 Notification setup:
 $BurntToastMessage
 
+First backup:
+$FirstBackupMessage
+
 $taskMessage
 "@
 
@@ -1257,8 +1301,8 @@ $taskMessage
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "GPORTAL Enshrouded Backup Setup"
-$form.Size = New-Object System.Drawing.Size(760, 650)
-$form.MinimumSize = New-Object System.Drawing.Size(760, 520)
+$form.Size = New-Object System.Drawing.Size(760, 680)
+$form.MinimumSize = New-Object System.Drawing.Size(760, 540)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "Sizable"
 $form.MaximizeBox = $true
@@ -1268,7 +1312,7 @@ $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 
 $contentPanel = New-Object System.Windows.Forms.Panel
 $contentPanel.Location = New-Object System.Drawing.Point(0, 0)
-$contentPanel.Size = New-Object System.Drawing.Size(744, 550)
+$contentPanel.Size = New-Object System.Drawing.Size(744, 580)
 $contentPanel.Anchor = "Top, Bottom, Left, Right"
 $contentPanel.AutoScroll = $true
 $form.Controls.Add($contentPanel)
@@ -1349,7 +1393,7 @@ $y += 165
 $settingsGroup = New-Object System.Windows.Forms.GroupBox
 $settingsGroup.Text = "Backup and Schedule Settings"
 $settingsGroup.Location = New-Object System.Drawing.Point(20, $y)
-$settingsGroup.Size = New-Object System.Drawing.Size(700, 215)
+$settingsGroup.Size = New-Object System.Drawing.Size(700, 240)
 $contentPanel.Controls.Add($settingsGroup)
 
 $settingsGroup.Controls.Add((New-Label "Backups to keep:" 15 32 125))
@@ -1371,16 +1415,19 @@ $settingsGroup.Controls.Add($txtTaskName)
 $chkCreateTask = New-CheckBox "Create or update scheduled task now" 145 100 $true 350
 $settingsGroup.Controls.Add($chkCreateTask)
 
-$chkRunLoggedOff = New-CheckBox "Run even when Windows is sitting at the logon screen" 145 128 $true 430
+$chkRunLoggedOff = New-CheckBox "Run silently even when Windows is sitting at the logon screen" 145 128 $true 480
 $settingsGroup.Controls.Add($chkRunLoggedOff)
 
-$chkToast = New-CheckBox "Show Windows toast notifications when logged in" 145 154 $false 420
+$chkRunBackupAfterInstall = New-CheckBox "Run one backup immediately after install" 145 154 $true 420
+$settingsGroup.Controls.Add($chkRunBackupAfterInstall)
+
+$chkToast = New-CheckBox "Show Windows toast notifications when logged in" 145 180 $false 420
 $settingsGroup.Controls.Add($chkToast)
 
-$chkInstallBurntToast = New-CheckBox "Install BurntToast notification module if needed" 145 180 $false 430
+$chkInstallBurntToast = New-CheckBox "Install BurntToast notification module if needed" 145 206 $false 430
 $settingsGroup.Controls.Add($chkInstallBurntToast)
 
-$y += 230
+$y += 255
 
 $taskGroup = New-Object System.Windows.Forms.GroupBox
 $taskGroup.Text = "Windows Scheduled Task Account"
